@@ -4,7 +4,10 @@ import (
 	"eth2-exporter/db"
 	"eth2-exporter/types"
 	"eth2-exporter/utils"
+	"eth2-exporter/version"
 	"flag"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v4/stdlib"
@@ -14,10 +17,13 @@ import (
 func main() {
 	configPath := flag.String("config", "", "Path to the config file")
 	statisticsDayToExport := flag.Int64("statistics.day", -1, "Day to export statistics (will export the day independent if it has been already exported or not")
+	statisticsDaysToExport := flag.String("statistics.days", "", "Days to export statistics (will export the day independent if it has been already exported or not")
+	streaksDisabledFlag := flag.Bool("streaks.disabled", false, "Disable exporting streaks")
+	poolsDisabledFlag := flag.Bool("pools.disabled", false, "Disable exporting pools")
 
 	flag.Parse()
 
-	logrus.Printf("config file path: %v", *configPath)
+	logrus.Printf("version: %v, config file path: %v", version.Version, *configPath)
 	cfg := &types.Config{}
 	err := utils.ReadConfig(cfg, *configPath)
 
@@ -29,7 +35,33 @@ func main() {
 	db.MustInitDB(cfg.Database.Username, cfg.Database.Password, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name)
 	defer db.DB.Close()
 
-	if *statisticsDayToExport >= 0 {
+	if *statisticsDaysToExport != "" {
+		s := strings.Split(*statisticsDaysToExport, "-")
+		if len(s) < 2 {
+			logrus.Fatalf("invalid arg")
+		}
+		firstDay, err := strconv.ParseUint(s[0], 10, 64)
+		if err != nil {
+			logrus.Fatal(err)
+		}
+		lastDay, err := strconv.ParseUint(s[1], 10, 64)
+		if err != nil {
+			logrus.Fatal(err)
+		}
+		logrus.Infof("exporting statistics for days %v-%v", firstDay, lastDay)
+		for d := firstDay; d <= lastDay; d++ {
+			_, err := db.DB.Exec("delete from validator_stats_status where day = $1", d)
+			if err != nil {
+				logrus.Fatalf("error resetting status for day %v: %v", d, err)
+			}
+
+			err = db.WriteStatisticsForDay(uint64(d))
+			if err != nil {
+				logrus.Errorf("error exporting stats for day %v: %v", d, err)
+			}
+		}
+		return
+	} else if *statisticsDayToExport >= 0 {
 		_, err := db.DB.Exec("delete from validator_stats_status where day = $1", *statisticsDayToExport)
 		if err != nil {
 			logrus.Fatalf("error resetting status for day %v: %v", *statisticsDayToExport, err)
@@ -43,8 +75,12 @@ func main() {
 	}
 
 	go statisticsLoop()
-	go streaksLoop()
-	go poolsLoop()
+	if !*streaksDisabledFlag {
+		go streaksLoop()
+	}
+	if !*poolsDisabledFlag {
+		go poolsLoop()
+	}
 
 	utils.WaitForCtrlC()
 
@@ -52,14 +88,22 @@ func main() {
 }
 
 func statisticsLoop() {
-	for true {
+	for {
 		latestEpoch, err := db.GetLatestEpoch()
 		if err != nil {
 			logrus.Errorf("error retreiving latest epoch from the db: %v", err)
 			time.Sleep(time.Minute)
 			continue
 		}
-		currentDay := latestEpoch / ((24 * 60 * 60) / utils.Config.Chain.SlotsPerEpoch / utils.Config.Chain.SecondsPerSlot)
+
+		epochsPerDay := (24 * 60 * 60) / utils.Config.Chain.SlotsPerEpoch / utils.Config.Chain.SecondsPerSlot
+		if latestEpoch < epochsPerDay {
+			logrus.Infof("skipping exporting validator_stats, first day has not been indexed yet")
+			time.Sleep(time.Minute)
+			continue
+		}
+
+		currentDay := latestEpoch / epochsPerDay
 		previousDay := currentDay - 1
 
 		if previousDay > currentDay {
@@ -75,7 +119,7 @@ func statisticsLoop() {
 			lastExportedDay++
 		}
 
-		logrus.Infof("previous day is %v, last exported day is %v", previousDay, lastExportedDay)
+		logrus.Infof("latest epoch is %v, previous day is %v, last exported day is %v", latestEpoch, previousDay, lastExportedDay)
 		if lastExportedDay <= previousDay || lastExportedDay == 0 {
 			for day := lastExportedDay; day <= previousDay; day++ {
 				err := db.WriteStatisticsForDay(day)
@@ -96,9 +140,9 @@ func streaksLoop() {
 		}
 		if done {
 			// updated streaks up to the current finalized epoch
-			time.Sleep(time.Hour)
+			time.Sleep(time.Second * 3600)
 		} else {
-			// go gaster until streaks are upated to the current finalized epoch
+			// go faster until streaks are upated to the current finalized epoch
 			time.Sleep(time.Second * 10)
 		}
 	}

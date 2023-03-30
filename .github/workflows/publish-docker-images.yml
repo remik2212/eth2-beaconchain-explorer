@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@master
       - name: Publish to Dockerhub Registry
-        uses: elgohr/Publish-Docker-Github-Action@master
+        uses: elgohr/Publish-Docker-Github-Action@v5
         with:
           name: gobitfly/eth2-beaconchain-explorer
           username: ${{ secrets.DOCKER_USERNAME }}

@@ -28,6 +28,19 @@ func Start(client rpc.Client) error {
 	go networkLivenessUpdater(client)
 	go eth1DepositsExporter()
 	go genesisDepositsExporter()
+	go checkSubscriptions()
+	go cleanupOldMachineStats()
+	go syncCommitteesExporter(client)
+	if utils.Config.SSVExporter.Enabled {
+		go ssvExporter()
+	}
+	if utils.Config.RocketpoolExporter.Enabled {
+		go rocketpoolExporter()
+	}
+
+	if utils.Config.Indexer.PubKeyTagsExporter.Enabled {
+		go UpdatePubkeyTag()
+	}
 
 	// wait until the beacon-node is available
 	for {
@@ -200,6 +213,9 @@ func Start(client rpc.Client) error {
 	newBlockChan := client.GetNewBlockChan()
 
 	lastExportedSlot := uint64(0)
+
+	doFullCheck(client)
+
 	for {
 		select {
 		case block := <-newBlockChan:
@@ -431,9 +447,10 @@ func ExportEpoch(epoch uint64, client rpc.Client) error {
 	start := time.Now()
 	defer func() {
 		metrics.TaskDuration.WithLabelValues("export_epoch").Observe(time.Since(start).Seconds())
+		logger.WithFields(logrus.Fields{"duration": time.Since(start), "epoch": epoch}).Info("completed exporting epoch")
 	}()
 
-	// Check if the partition for the validator_balances and attestation_assignments table for this epoch exists
+	// Check if the partition for the validator_balances and attestation_assignments and sync_assignments table for this epoch exists
 	var one int
 	logger.Printf("checking partition status for epoch %v", epoch)
 	week := epoch / 1575
@@ -453,15 +470,23 @@ func ExportEpoch(epoch uint64, client rpc.Client) error {
 			logger.Fatalf("unable to create partition validator_balances_%v: %v", week, err)
 		}
 	}
+	err = db.DB.Get(&one, fmt.Sprintf("SELECT 1 FROM information_schema.tables WHERE table_name = 'sync_assignments_%v'", week))
+	if err != nil {
+		logger.Infof("creating partition sync_assignments_%v", week)
+		_, err := db.DB.Exec(fmt.Sprintf("CREATE TABLE sync_assignments_%v PARTITION OF sync_assignments_p FOR VALUES IN (%v);", week, week))
+		if err != nil {
+			logger.Fatalf("unable to create partition sync_assignments_%v: %v", week, err)
+		}
+	}
 
 	startGetEpochData := time.Now()
 	logger.Printf("retrieving data for epoch %v", epoch)
 	data, err := client.GetEpochData(epoch)
-
 	if err != nil {
 		return fmt.Errorf("error retrieving epoch data: %v", err)
 	}
 	metrics.TaskDuration.WithLabelValues("rpc_get_epoch_data").Observe(time.Since(startGetEpochData).Seconds())
+	logger.WithFields(logrus.Fields{"duration": time.Since(startGetEpochData), "epoch": epoch}).Info("completed getting epoch-data")
 	logger.Printf("data for epoch %v retrieved, took %v", epoch, time.Since(start))
 
 	if len(data.Validators) == 0 {
@@ -494,11 +519,11 @@ func updateEpochStatus(client rpc.Client, startEpoch, endEpoch uint64) error {
 			}
 		}
 	}
-	return nil
+	return db.UpdateEpochFinalization()
 }
 
 func performanceDataUpdater() {
-	for true {
+	for {
 		logger.Info("updating validator performance data")
 		err := updateValidatorPerformance()
 
@@ -570,7 +595,7 @@ func updateValidatorPerformance() error {
 		Amount    int64
 	}{}
 
-	err = tx.Select(&deposits, `SELECT block_slot / 32 AS epoch, amount, publickey FROM blocks_deposits`)
+	err = tx.Select(&deposits, `SELECT block_slot / 32 AS epoch, amount, publickey FROM blocks_deposits INNER JOIN blocks ON blocks_deposits.block_root = blocks.blockroot AND blocks.status = '1'`)
 	if err != nil {
 		return fmt.Errorf("error retrieving validator deposits data: %w", err)
 	}
@@ -684,6 +709,41 @@ func updateValidatorPerformance() error {
 	return tx.Commit()
 }
 
+func finalityCheckpointsUpdater(client rpc.Client) {
+	t := time.NewTicker(time.Second * time.Duration(utils.Config.Chain.SecondsPerSlot))
+	for range t.C {
+		var prevEpoch uint64
+		err := db.DB.Get(&prevEpoch, `select coalesce(max(epoch),1) from finality_checkpoints`)
+		if err != nil {
+			logger.WithError(err).Errorf("error getting last exported finality_checkpoints from db")
+			continue
+		}
+		nextEpoch := prevEpoch + 1
+		checkpoints, err := client.GetFinalityCheckpoints(nextEpoch)
+		if err != nil {
+			logger.WithFields(logrus.Fields{"error": err, "epoch": nextEpoch}).Errorf("error getting finality_checkpoints from client")
+			continue
+		}
+		_, err = db.DB.Exec(`
+			insert into finality_checkpoints (
+				epoch, 
+				current_justified_epoch, current_justified_root, 
+				previous_justified_epoch, previous_justified_root, 
+				finalized_epoch, finalized_root
+			)
+			values ($1, $2, $3, $4, $5, $6, $7)`,
+			nextEpoch,
+			checkpoints.CurrentJustified.Epoch, checkpoints.CurrentJustified.Root,
+			checkpoints.PreviousJustified.Epoch, checkpoints.PreviousJustified.Root,
+			checkpoints.Finalized.Epoch, checkpoints.Finalized.Root,
+		)
+		if err != nil {
+			logger.WithFields(logrus.Fields{"error": err, "epoch": nextEpoch}).Errorf("error inserting finality_checkpoints into db")
+			continue
+		}
+	}
+}
+
 func networkLivenessUpdater(client rpc.Client) {
 	var prevHeadEpoch uint64
 	err := db.DB.Get(&prevHeadEpoch, "SELECT COALESCE(MAX(headepoch), 0) FROM network_liveness")
@@ -746,7 +806,7 @@ func genesisDepositsExporter() {
 
 		// check if genesis-deposits have already been exported
 		var genesisDepositsCount uint64
-		err = db.DB.Get(&genesisDepositsCount, "SELECT COUNT(*) FROM blocks_deposits WHERE block_slot=0")
+		err = db.DB.Get(&genesisDepositsCount, "SELECT COUNT(*) FROM blocks_deposits INNER JOIN blocks ON blocks_deposits.block_root = blocks.blockroot AND blocks.status = '1' WHERE block_slot=0")
 		if err != nil {
 			logger.Errorf("error retrieving genesis-deposits-count when exporting genesis-deposits: %v", err)
 			time.Sleep(time.Second * 60)

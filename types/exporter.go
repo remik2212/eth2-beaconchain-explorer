@@ -1,7 +1,7 @@
 package types
 
 import (
-	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	ethpb "github.com/prysmaticlabs/prysm/proto/prysm/v1alpha1"
 )
 
 // ChainHead is a struct to hold chain head data
@@ -18,6 +18,21 @@ type ChainHead struct {
 	PreviousJustifiedSlot      uint64
 	PreviousJustifiedEpoch     uint64
 	PreviousJustifiedBlockRoot []byte
+}
+
+type FinalityCheckpoints struct {
+	PreviousJustified struct {
+		Epoch uint64 `json:"epoch"`
+		Root  string `json:"root"`
+	} `json:"previous_justified"`
+	CurrentJustified struct {
+		Epoch uint64 `json:"epoch"`
+		Root  string `json:"root"`
+	} `json:"current_justified"`
+	Finalized struct {
+		Epoch uint64 `json:"epoch"`
+		Root  string `json:"root"`
+	} `json:"finalized"`
 }
 
 // EpochData is a struct to hold epoch data
@@ -61,15 +76,22 @@ type Validator struct {
 	Balance7d         uint64 `db:"balance7d"`
 	Balance31d        uint64 `db:"balance31d"`
 	Status            string `db:"status"`
+
+	LastAttestationSlot uint64 `db:"lastattestationslot"`
+	LastProposalSlot    uint64 `db:"lastproposalslot"`
 }
 
 // ValidatorQueue is a struct to hold validator queue data
 type ValidatorQueue struct {
-	ChurnLimit                 uint64
-	ActivationPublicKeys       [][]byte
-	ExitPublicKeys             [][]byte
-	ActivationValidatorIndices []uint64
-	ExitValidatorIndices       []uint64
+	Activating uint64
+	Exititing  uint64
+}
+
+type SyncAggregate struct {
+	SyncCommitteeValidators    []uint64
+	SyncCommitteeBits          []byte
+	SyncCommitteeSignature     []byte
+	SyncAggregateParticipation float64
 }
 
 // Block is a struct to hold block data
@@ -90,6 +112,7 @@ type Block struct {
 	Attestations      []*Attestation
 	Deposits          []*Deposit
 	VoluntaryExits    []*VoluntaryExit
+	SyncAggregate     *SyncAggregate // warning: sync aggregate may be nil, for phase0 blocks
 	Canonical         bool
 }
 
@@ -194,6 +217,7 @@ type BlockComparisonContainer struct {
 type EpochAssignments struct {
 	ProposerAssignments map[uint64]uint64
 	AttestorAssignments map[string]uint64
+	SyncAssignments     []uint64
 }
 
 // Eth1Deposit is a struct to hold eth1-deposit data

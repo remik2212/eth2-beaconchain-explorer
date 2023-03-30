@@ -1480,22 +1480,22 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 	if utils.Config.Chain.Network == "mainnet" {
 		rows := []struct {
 			Name  *string
-			Count uint64
+			Count *uint64
 		}{}
 
 		err = db.DB.Select(&rows, `
-			select ss.name, b.count
-			from(select from_address as address, count(*) as count
+		select sps.name, b.count
+		from (select ENCODE(from_address::bytea, 'hex') as address, count(*) as count
 			from (
 				select publickey, from_address
 				from eth1_deposits
 				where valid_signature = true
 				group by publickey, from_address
 				having sum(amount) >= 32e9
-			) a
-			group by from_address
-			order by count desc) b
-			left JOIN stake_pools_stats ss ON Lower(ENCODE(b.address::bytea, 'hex')) like LOWER(ss.address)`)
+			) a 
+			group by from_address) b
+		full outer join stake_pools_stats as sps on b.address=sps.address
+		order by count desc`)
 		if err != nil {
 			return nil, fmt.Errorf("error getting eth1-deposits-distribution: %w", err)
 		}
@@ -1504,6 +1504,11 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 				Name:      "Kraken",
 				Y:         0,
 				Drilldown: "Kraken",
+			},
+			{
+				Name:      "Lido",
+				Y:         0,
+				Drilldown: "Lido",
 			},
 			{
 				Name:      "Binance",
@@ -1531,11 +1536,6 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 				Drilldown: "Staked.us",
 			},
 			{
-				Name:      "Lido",
-				Y:         0,
-				Drilldown: "Lido",
-			},
-			{
 				Name:      "Stakefish",
 				Y:         0,
 				Drilldown: "Stakefish",
@@ -1545,11 +1545,21 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 				Y:         0,
 				Drilldown: "Defi",
 			},
+			{
+				Name:      "Guarda",
+				Y:         0,
+				Drilldown: "Guarda",
+			},
 		}
 		drillSeries = []drillSeriesData{
 			{
 				Name: "Kraken",
 				ID:   "Kraken",
+				Data: [][2]string{},
+			},
+			{
+				Name: "Lido",
+				ID:   "Lido",
 				Data: [][2]string{},
 			},
 			{
@@ -1578,11 +1588,6 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 				Data: [][2]string{},
 			},
 			{
-				Name: "Lido",
-				ID:   "Lido",
-				Data: [][2]string{},
-			},
-			{
 				Name: "Stakefish",
 				ID:   "Stakefish",
 				Data: [][2]string{},
@@ -1590,6 +1595,11 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 			{
 				Name: "Defi",
 				ID:   "Defi",
+				Data: [][2]string{},
+			},
+			{
+				Name: "Guarda",
+				ID:   "Guarda",
 				Data: [][2]string{},
 			},
 			{ // always must be the last
@@ -1601,19 +1611,26 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 
 		var unknownCount uint64 = 0
 		for i := range rows {
+			var count uint64 = 0
+			name := "Unknown"
+			if rows[i].Count != nil {
+				count = *rows[i].Count
+			}
 			if rows[i].Name == nil {
-				unknownCount += rows[i].Count
+				unknownCount += count
 				continue
+			} else {
+				name = *rows[i].Name
 			}
 			foundMatch := false
 			for j, seriesItem := range seriesData {
-				if strings.Contains(*rows[i].Name, seriesItem.Drilldown) {
-					seriesData[j].Y += rows[i].Count
+				if strings.Contains(name, seriesItem.Drilldown) {
+					seriesData[j].Y += count
 				}
 
-				if strings.Contains(*rows[i].Name, drillSeries[j].ID) {
+				if strings.Contains(name, drillSeries[j].ID) {
 					drillSeries[j].Data = append(drillSeries[j].Data,
-						[2]string{*rows[i].Name, fmt.Sprintf("%d", rows[i].Count)})
+						[2]string{name, fmt.Sprintf("%d", count)})
 					foundMatch = true
 					break
 				}
@@ -1621,15 +1638,96 @@ func depositsDistributionChartData() (*types.GenericChartData, error) {
 
 			if !foundMatch {
 				drillSeries[len(drillSeries)-1].Data = append(drillSeries[len(drillSeries)-1].Data,
-					[2]string{*rows[i].Name, fmt.Sprintf("%d", rows[i].Count)},
+					[2]string{name, fmt.Sprintf("%d", count)},
 				)
-				othersItem.Y += rows[i].Count
+				othersItem.Y += count
 			}
 
 		}
 		drillSeries[len(drillSeries)-1].Data = append(drillSeries[len(drillSeries)-1].Data,
 			[2]string{"Unknown", fmt.Sprintf("%d", unknownCount)})
 		othersItem.Y += unknownCount
+	} else if utils.Config.Chain.Network == "prater" {
+		rows := []struct {
+			Name  *string
+			Count *uint64
+		}{}
+
+		err = db.DB.Select(&rows, `
+		select sps.name, b.count
+		from (select ENCODE(from_address::bytea, 'hex') as address, count(*) as count
+			from (
+				select publickey, from_address
+				from eth1_deposits
+				where valid_signature = true
+				group by publickey, from_address
+				having sum(amount) >= 32e9
+			) a 
+			group by from_address) b
+		full outer join stake_pools_stats as sps on b.address=sps.address
+		order by count desc`)
+		if err != nil {
+			return nil, fmt.Errorf("error getting eth1-deposits-distribution: %w", err)
+		}
+		seriesData = []seriesDataItem{ // make sure this has the same order as "drillSeries" below
+			{
+				Name:      "Rocketpool",
+				Y:         0,
+				Drilldown: "Rocketpool",
+			},
+		}
+		drillSeries = []drillSeriesData{
+			{
+				Name: "Rocketpool",
+				ID:   "Rocketpool",
+				Data: [][2]string{},
+			},
+			{ // always must be the last
+				Name: "Others",
+				ID:   "Others",
+				Data: [][2]string{},
+			},
+		}
+
+		var unknownCount uint64 = 0
+		for i := range rows {
+			var count uint64 = 0
+			name := "Unknown"
+			if rows[i].Count != nil {
+				count = *rows[i].Count
+			}
+			if rows[i].Name == nil {
+				unknownCount += count
+				continue
+			} else {
+				name = *rows[i].Name
+			}
+			foundMatch := false
+			for j, seriesItem := range seriesData {
+				if strings.Contains(name, seriesItem.Drilldown) {
+					seriesData[j].Y += count
+				}
+
+				if strings.Contains(name, drillSeries[j].ID) {
+					drillSeries[j].Data = append(drillSeries[j].Data,
+						[2]string{name, fmt.Sprintf("%d", count)})
+					foundMatch = true
+					break
+				}
+			}
+
+			if !foundMatch {
+				drillSeries[len(drillSeries)-1].Data = append(drillSeries[len(drillSeries)-1].Data,
+					[2]string{name, fmt.Sprintf("%d", count)},
+				)
+				othersItem.Y += count
+			}
+
+		}
+		drillSeries[len(drillSeries)-1].Data = append(drillSeries[len(drillSeries)-1].Data,
+			[2]string{"Unknown", fmt.Sprintf("%d", unknownCount)})
+		othersItem.Y += unknownCount
+
 	} else {
 		rows := []struct {
 			Address []byte

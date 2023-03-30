@@ -5,7 +5,6 @@ import (
 	"eth2-exporter/db"
 	"eth2-exporter/types"
 	"eth2-exporter/utils"
-	"fmt"
 	"html/template"
 	"net/http"
 	"strconv"
@@ -14,6 +13,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/lib/pq"
 )
+
+const searchValidatorsResultLimit = 300
 
 var searchNotFoundTemplate = template.Must(template.New("searchnotfound").Funcs(utils.GetTemplateFuncs()).ParseFiles("templates/layout.html", "templates/searchnotfound.html"))
 
@@ -78,12 +79,10 @@ func SearchAhead(w http.ResponseWriter, r *http.Request) {
 		err = db.DB.Select(graffiti, `
 			SELECT graffiti, count(*)
 			FROM blocks
-			WHERE 
-				LOWER(ENCODE(graffiti , 'escape')) LIKE LOWER($1)
-				OR ENCODE(graffiti, 'hex') LIKE ($2)
+			WHERE graffiti_text ILIKE $1
 			GROUP BY graffiti
 			ORDER BY count desc
-			LIMIT 10`, "%"+search+"%", fmt.Sprintf("%%%x%%", search))
+			LIMIT 10`, "%"+search+"%")
 		if err == nil {
 			for i := range *graffiti {
 				(*graffiti)[i].Graffiti = utils.FormatGraffitiString((*graffiti)[i].Graffiti)
@@ -136,15 +135,15 @@ func SearchAhead(w http.ResponseWriter, r *http.Request) {
 				SELECT 
 					DISTINCT ON(validatorindex) validatorindex,
 					ENCODE(from_address::bytea, 'hex') as from_address,
-					ROW_NUMBER() OVER (PARTITION BY from_address ORDER BY validatorindex) AS validatorrow,
+					DENSE_RANK() OVER (PARTITION BY from_address ORDER BY validatorindex) AS validatorrow,
 					DENSE_RANK() OVER (ORDER BY from_address) AS addressrow
 				FROM eth1_deposits
 				INNER JOIN validators ON validators.pubkey = eth1_deposits.publickey
 				WHERE ENCODE(from_address::bytea, 'hex') LIKE LOWER($1) 
 			) a 
-			WHERE validatorrow <= 301 AND addressrow <= 10
+			WHERE validatorrow <= $2 AND addressrow <= 10
 			GROUP BY from_address
-			ORDER BY count DESC`, search+"%")
+			ORDER BY count DESC`, search+"%", searchValidatorsResultLimit)
 	case "indexed_validators_by_graffiti":
 		// find validators per graffiti (limit result by N graffities and M validators per graffiti)
 		res := []struct {
@@ -161,13 +160,11 @@ func SearchAhead(w http.ResponseWriter, r *http.Request) {
 					DENSE_RANK() OVER(ORDER BY graffiti) AS graffitirow
 				FROM blocks 
 				LEFT JOIN validators ON blocks.proposer = validators.validatorindex
-				WHERE 
-					LOWER(ENCODE(graffiti , 'escape')) LIKE LOWER($1)
-					OR ENCODE(graffiti, 'hex') LIKE ($2)
+				WHERE graffiti_text ILIKE $1
 			) a 
-			WHERE validatorrow <= 301 AND graffitirow <= 10
+			WHERE validatorrow <= $2 AND graffitirow <= 10
 			GROUP BY graffiti
-			ORDER BY count DESC`, "%"+search+"%", fmt.Sprintf("%%%x%%", search))
+			ORDER BY count DESC`, "%"+search+"%", searchValidatorsResultLimit)
 		if err == nil {
 			for i := range res {
 				res[i].Graffiti = utils.FormatGraffitiString(res[i].Graffiti)
@@ -192,9 +189,9 @@ func SearchAhead(w http.ResponseWriter, r *http.Request) {
 				LEFT JOIN validator_names ON validators.pubkey = validator_names.publickey
 				WHERE LOWER(validator_names.name) LIKE LOWER($1)
 			) a
-			WHERE validatorrow <= 301 AND namerow <= 10
+			WHERE validatorrow <= $2 AND namerow <= 10
 			GROUP BY name
-			ORDER BY count DESC, name DESC`, "%"+search+"%")
+			ORDER BY count DESC, name DESC`, "%"+search+"%", searchValidatorsResultLimit)
 		if err == nil {
 			for i := range res {
 				res[i].Name = string(utils.FormatValidatorName(res[i].Name))

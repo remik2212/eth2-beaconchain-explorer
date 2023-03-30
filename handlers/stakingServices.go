@@ -26,6 +26,7 @@ func StakingServices(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", 503)
 		return
 	}
+	pageData.NoAds = data.NoAds
 	data.Data = pageData
 
 	err = stakingServicesTemplate.ExecuteTemplate(w, "layout", data)
@@ -91,7 +92,7 @@ func AddStakingServicePost(w http.ResponseWriter, r *http.Request) {
 	// escape html
 	msg = template.HTMLEscapeString(msg)
 
-	err = mail.SendMail("support@beaconcha.in", "New staking inquiry", msg)
+	err = mail.SendMail("support@beaconcha.in", "New staking inquiry", msg, []types.EmailAttachment{})
 	if err != nil {
 		logger.Errorf("error sending ad form: %v", err)
 		utils.SetFlash(w, r, "stake_flash", "Error: unable to submit ad request")

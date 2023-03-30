@@ -1,6 +1,6 @@
 {{ define "js"}}
-    <script type="text/javascript" src="/bundle/js/datatables.min.js"></script>
-    <script type="text/javascript" src="/bundle/js/datatable_input.js"></script>
+    <script type="text/javascript" src="/js/datatables.min.js"></script>
+    <script type="text/javascript" src="/js/datatable_input.js"></script>
     <script>
         $(document).ready(function () {
             var tblOpts = {
@@ -15,8 +15,8 @@
                     searchPlaceholder: 'Search by Public Key / Index / Name',
                     search: '',
                     paginate: {
-                        previous: "<",
-                        next: ">",
+                        previous: '<i class="fas fa-chevron-left"></i>',
+                        next: '<i class="fas fa-chevron-right"></i>'
                     }
                 },
                 columnDefs: [
@@ -72,7 +72,7 @@
 
 {{ define "css"}}
     <link rel="stylesheet" type="text/css"
-          href="/bundle/css/datatables.min.css"/>
+          href="/css/datatables.min.css"/>
 
 {{end}}
 

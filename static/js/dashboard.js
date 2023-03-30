@@ -1,4 +1,3 @@
-
 function createBlock(x, y) {
   use = document.createElementNS("http://www.w3.org/2000/svg","use")
   // use.setAttributeNS(null, "style", `transform: translate(calc(${x} * var(--disperse-factor)), calc(${y} * var(--disperse-factor)));`)
@@ -34,9 +33,9 @@ function appendBlocks(blocks) {
 }
 
 var selectedBTNindex = null
-const VALLIMIT = 200
+var VALLIMIT = 280
 function showValidatorHist (index) {
-  if ($.fn.dataTable.isDataTable('#dash-validator-history-table')){
+  if ($.fn.dataTable.isDataTable('#dash-validator-history-table')) {
         $('#dash-validator-history-table').DataTable().destroy();
   }
 
@@ -55,11 +54,11 @@ function showValidatorHist (index) {
               searchPlaceholder: 'Search by Epoch Number',
               search: '',
               paginate: {
-                  previous: "<",
-                  next: ">",
+                previous: '<i class="fas fa-chevron-left"></i>',
+                next: '<i class="fas fa-chevron-right"></i>'
               }
         },
-        drawCallback: function (settings) {
+        drawCallback: function(settings) {
               formatTimestamps()
         },
   })
@@ -76,15 +75,15 @@ function showValidatorHist (index) {
   updateValidatorInfo(index)
 }
 
-function toggleFirstrow(){
+function toggleFirstrow() {
   $("#dashChartTabs a:first").tab("show")
   let id = $("#validators tbody>tr:nth-child(1)>td>button").attr('id')
-  setTimeout(function (){
+  setTimeout(function() {
         $('#'+id).focus()
   }, 200)
 }
 
-function updateValidatorInfo(index){
+function updateValidatorInfo(index) {
   fetch(`/validator/${index}/proposedblocks?draw=1&start=1&length=1`,{
     method: "GET"
   }).then((res)=>{
@@ -121,7 +120,7 @@ function updateValidatorInfo(index){
   })
 }
 
-function getValidatorQueryString(){
+function getValidatorQueryString() {
   return window.location.href.slice(window.location.href.indexOf("?"), window.location.href.length)
 }
 
@@ -169,7 +168,7 @@ window.addEventListener('load', function() {
   })
 })
 
-function addValidatorUpdateUI(){
+function addValidatorUpdateUI() {
   $('#validators-tab').removeClass('disabled')
   $('#validator-art').attr('class', "d-none")
   $('#dash-validator-history-info').removeClass('d-none')
@@ -192,8 +191,8 @@ function addValidatorUpdateUI(){
   }).then((res)=>{
     res.json().then((data)=>{
       let eff = 0.0
-      for (let incDistance of data){
-        if (incDistance===0.0){
+      for (let incDistance of data) {
+        if (incDistance===0.0) {
           continue
         }
         eff+=(1.0/incDistance)*100.0
@@ -207,42 +206,42 @@ function addValidatorUpdateUI(){
 
 function showSelectedValidator(){
   setTimeout(function(){
-    $( 'span[id^=dropdownMenuButton]' ).each(function(el, item){
-      if ($(item).attr('id')==="dropdownMenuButton"+selectedBTNindex){
+    $( 'span[id^=dropdownMenuButton]' ).each(function(el, item) {
+      if ($(item).attr('id')==="dropdownMenuButton"+selectedBTNindex) {
         $(item).addClass('bg-primary')
       }else{
-        if (selectedBTNindex != null){
+        if (selectedBTNindex != null) {
           $(item).removeClass('bg-primary')
         }
       }
     })
   }, 100)//if deselected index is not clearing increase the time
 
-  $('.hbtn').hover(function () {
+  $('.hbtn').hover(function() {
     $(this).addClass('shadow');
     }, function () {
     $(this).removeClass('shadow');
   });
 }
 
-function showValidatorsInSearch(qty){
+function showValidatorsInSearch(qty) {
   qty = parseInt(qty)
   let i=0
   let l=[]
   $('#selected-validators-input li:not(:last)').remove()
-  $('#selected-validators.val-modal li').each(function(el, item){
+  $('#selected-validators.val-modal li').each(function(el, item) {
     if (i===qty) {return}
     l.push($(item).clone())
     i++
   })
-  for (let i=0; i<l.length; i++){
+  for (let i=0; i<l.length; i++) {
     $('#selected-validators-input').prepend(l[l.length-(i+1)])
   }
 }
 
 
-function renderProposedHistoryTable(data){
-  if ($.fn.dataTable.isDataTable('#proposals-table')){
+function renderProposedHistoryTable(data) {
+  if ($.fn.dataTable.isDataTable('#proposals-table')) {
     $('#proposals-table').DataTable().destroy();
   }
 
@@ -290,14 +289,14 @@ function renderProposedHistoryTable(data){
 }
 
 // var proposedHistTableData = []
-function showProposedHistoryTable(){
+function showProposedHistoryTable() {
   // if (proposedHistTableData.length===0){
     fetch('/dashboard/data/proposalshistory'+getValidatorQueryString(), {
       method: "GET",
     }).then((res)=>{
-        res.json().then(function(data){
+        res.json().then(function(data) {
         let proposedHistTableData=[]
-        for (let item of data){
+        for (let item of data) {
           proposedHistTableData.push([item[0], item[1], [item[2], item[3], item[4]]])
         }
         renderProposedHistoryTable(proposedHistTableData)
@@ -308,7 +307,7 @@ function showProposedHistoryTable(){
   // }
 }
 
-function switchFrom(el1, el2, el3, el4){
+function switchFrom(el1, el2, el3, el4) {
   $(el1).removeClass("proposal-switch-selected")
   $(el2).addClass("proposal-switch-selected")
   $(el3).addClass("d-none")
@@ -318,6 +317,10 @@ function switchFrom(el1, el2, el3, el4){
 var firstSwitch=true
 
 $(document).ready(function() {
+  $("#rewards-button").on("click", ()=>{
+    localStorage.setItem("load_dashboard_validators", true)
+    window.location.href = "/rewards"
+  })
   
   $('.proposal-switch').on('click', ()=>{
     if ($('.switch-chart').hasClass("proposal-switch-selected")){
@@ -331,7 +334,7 @@ $(document).ready(function() {
     }
   })
 
-  $('#validators').on("page.dt", function(){
+  $('#validators').on("page.dt", function() {
     showSelectedValidator()
   })
   //bookmark button adds all validators in the dashboard to the watchlist
@@ -391,7 +394,7 @@ $(document).ready(function() {
 
   clearSearch.on('click', function() {
     clearSearch.empty().append(tickIcon);
-    setTimeout(function(){
+    setTimeout(function() {
       clearSearch.empty().append(copyIcon);
     }, 500)
   })
@@ -405,6 +408,10 @@ $(document).ready(function() {
     pagingType: 'full_numbers',
     lengthMenu: [10, 25, 50],
     info: false,
+    language: {
+      search: '',
+      searchPlaceholder: 'Search...'
+    },
     preDrawCallback: function() {
       // this does not always work.. not sure how to solve the staying tooltip
       try {
@@ -419,9 +426,17 @@ $(document).ready(function() {
       {
         targets: 0,
         data: '0',
+        createdCell: function(td, cellData, rowData, row, col) {
+          $(td).css('display', 'flex');
+          $(td).css('align-items', 'center');
+          $(td).css('justify-content', 'space-between');
+      },
         render: function(data, type, row, meta) {
-          if (type == 'sort' || type == 'type') return data
-          return '<a href="/validator/' + data + '">0x' + data.substr(0, 8) + '...</a>'
+          if (type == 'sort' || type == 'type') {
+            return data
+          }
+          // return '<a href="/validator/' + data + '">0x' + data.substr(0, 8) + '...</a>'
+          return `<a href="/validator/${data}">0x${data.substr(0, 8)}...</a><i class="fa fa-copy text-muted p-1" role="button" data-toggle="tooltip" title="Copy to clipboard" data-clipboard-text="0x${data}"></i>`
         }
       },
       {
@@ -430,7 +445,7 @@ $(document).ready(function() {
         render: function(data, type, row, meta) {
           if (type == 'sort' || type == 'type') return data
           // return '<a href="/validator/' + data + '">' + data + '</a>'
-          return `<span class="m-0 p-1 hbtn" id="dropdownMenuButton${data}" style="cursor: pointer;" onclick="showValidatorHist('${data}')">
+          return `<span class="m-0 p-2 hbtn" id="dropdownMenuButton${data}" style="cursor: pointer;" onclick="showValidatorHist('${data}')">
                       ${data}
                   </span>
                  `
@@ -671,7 +686,7 @@ $(document).ready(function() {
     // window.location = "/dashboard"
   })
 
-  function setInitialState () {
+  function setInitialState() {
     var _state = {}
     _state.validators = []
     _state.validatorsCount = {
@@ -896,6 +911,7 @@ $(document).ready(function() {
       // } else {
       //   appendBlocks(xBlocks.slice(0, state.validators.length * 3 - 1))
       // }
+      document.querySelector('#rewards-button').style.visibility = "visible"
       document.querySelector('#bookmark-button').style.visibility = "visible"
       document.querySelector('#copy-button').style.visibility = "visible"
       document.querySelector('#clear-search').style.visibility = "visible"
@@ -906,25 +922,18 @@ $(document).ready(function() {
           var t1 = Date.now()
           console.log(`loaded earnings: fetch: ${t1-t0}ms`)
           if (!result) return
-          // document.getElementById('stats').style.display = 'flex'
-          var lastDay = (result.lastDay / 1e9 * exchangeRate).toFixed(4)
-          var lastWeek = (result.lastWeek / 1e9 * exchangeRate).toFixed(4)
-          var lastMonth = (result.lastMonth / 1e9 * exchangeRate).toFixed(4)
-          var total = (result.total / 1e9 * exchangeRate)
-          var totalDeposits = (result.totalDeposits / 1e9 * exchangeRate)
-          var totalChange = total+totalDeposits
 
-          // console.log(totalChange, total, exchangeRate, "\n", result.total, result.totalDeposits)
-          addChange("#earnings-day", lastDay)
-          addChange("#earnings-week", lastWeek)
-          addChange("#earnings-month", lastMonth)
+          // addChange("#earnings-day", result.lastDay)
+          // addChange("#earnings-week", result.lastWeek)
+          // addChange("#earnings-month", result.lastMonth)
 
-          document.querySelector('#earnings-day').innerHTML = (lastDay || '0.000') + " <span class='small text-muted'>" + currency + "</span>"
-          document.querySelector('#earnings-week').innerHTML = (lastWeek || '0.000') + " <span class='small text-muted'>" + currency + "</span>"
-          document.querySelector('#earnings-month').innerHTML = (lastMonth || '0.000') + " <span class='small text-muted'>" + currency + "</span>"
-          document.querySelector('#earnings-total').innerHTML = (totalChange.toFixed(2) || '0.000') + `<span id="earnings-total-change">${total.toFixed(4)}</span>` + " <span class='small text-muted'>" + currency + "</span>"
-          
-          addChange("#earnings-total-change", total)
+          document.querySelector('#earnings-day').innerHTML = (result.lastDayFormatted || '0.000') 
+          document.querySelector('#earnings-week').innerHTML = (result.lastWeekFormatted || '0.000') 
+          document.querySelector('#earnings-month').innerHTML = (result.lastMonthFormatted || '0.000')
+          document.querySelector('#earnings-total').innerHTML = (result.totalChangeFormatted || '0.000') + ` <span class="d-block" id="earnings-total-change">${result.totalFormatted}</span>`
+          $("#earnings-total span:first").removeClass("text-success").removeClass("text-danger")
+          $("#earnings-total span:first").html($("#earnings-total span:first").html().replace("+", ""))
+          // addChange("#earnings-total-change", result.total)
         }
       })
       $.ajax({
@@ -975,6 +984,7 @@ $(document).ready(function() {
 
     } else {
       document.querySelector('#copy-button').style.visibility = "hidden"
+      document.querySelector('#rewards-button').style.visibility = "hidden"
       document.querySelector('#bookmark-button').style.visibility = "hidden"
       document.querySelector('#clear-search').style.visibility = "hidden"
       // window.location = "/dashboard"
@@ -1085,7 +1095,7 @@ function createBalanceChart(income) {
       type: 'datetime',
       range: 31 * 24 * 60 * 60 * 1000,
       labels: {
-        formatter: function(){
+        formatter: function() {
           var epoch = timeToEpoch(this.value)
           var orig = this.axis.defaultLabelFormatter.call(this)
           return `${orig}<br/>Epoch ${epoch}`

@@ -5,7 +5,7 @@
       <span>
         <i class="fas fa-history"></i> Most recent epochs
       </span>
-      <a class="btn btn-primary btn-sm float-right" href="/epochs">View more</a>
+      <a class="btn btn-primary btn-sm float-right text-white" href="/epochs">View more</a>
     </h3>
   </div>
   <div class="card-body p-0">
@@ -22,7 +22,7 @@
         </thead>
         <tbody v-if="page && page.epochs && page.epochs.length">
         <tr v-for="epoch in page.epochs">
-          <td><a v-bind:href="'/epoch/' + epoch.epoch">${ epoch.epoch }</a></td>
+          <td><a v-bind:href="'/epoch/' + epoch.epoch">${ addCommas(epoch.epoch) }</a></td>
           <td>${ epoch.ts | fromNow }</td>
           <td v-html="epoch.finalized_formatted"></td>
           <td v-html="epoch.eligibleether_formatted"></td>

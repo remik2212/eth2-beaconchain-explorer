@@ -12,14 +12,13 @@ import (
 	"eth2-exporter/services"
 	"eth2-exporter/types"
 	"eth2-exporter/utils"
+	"eth2-exporter/version"
 	"flag"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	httpSwagger "github.com/swaggo/http-swagger"
-	"gopkg.in/yaml.v2"
 
 	"github.com/sirupsen/logrus"
 
@@ -45,39 +44,31 @@ func initStripe(http *mux.Router) error {
 }
 
 func main() {
-	ethclients.SetIsUserSubscribedCallback(db.IsUserSubscribed)
-	configPath := flag.String("config", "config.yml", "Path to the config file")
+	configPath := flag.String("config", "config/default.config.yml", "Path to the config file")
 	flag.Parse()
 
-	logrus.Printf("config file path: %v", *configPath)
+	logrus.WithField("config", *configPath).WithField("version", version.Version).Printf("starting")
 	cfg := &types.Config{}
 	err := utils.ReadConfig(cfg, *configPath)
 	if err != nil {
 		logrus.Fatalf("error reading config file: %v", err)
 	}
 	utils.Config = cfg
-	// decode phase0 config
-	if len(utils.Config.Chain.Phase0Path) > 0 {
-		phase0 := &types.Phase0{}
-		f, err := os.Open(utils.Config.Chain.Phase0Path)
-		if err != nil {
-			logrus.Errorf("error opening Phase0 Config file %v: %v", utils.Config.Chain.Phase0Path, err)
-		} else {
-			decoder := yaml.NewDecoder(f)
-			err = decoder.Decode(phase0)
-			if err != nil {
-				logrus.Errorf("error decoding Phase0 Config file %v: %v", utils.Config.Chain.Phase0Path, err)
-			} else {
-				utils.Config.Chain.Phase0 = *phase0
-			}
-		}
-	}
 
 	db.MustInitDB(cfg.Database.Username, cfg.Database.Password, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name)
 	defer db.DB.Close()
 
 	db.MustInitFrontendDB(cfg.Frontend.Database.Username, cfg.Frontend.Database.Password, cfg.Frontend.Database.Host, cfg.Frontend.Database.Port, cfg.Frontend.Database.Name, cfg.Frontend.SessionSecret)
 	defer db.FrontendDB.Close()
+
+	if utils.Config.Metrics.Enabled {
+		go metrics.MonitorDB(db.DB)
+		DBStr := fmt.Sprintf("%v-%v-%v-%v-%v", cfg.Database.Username, cfg.Database.Password, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name)
+		frontendDBStr := fmt.Sprintf("%v-%v-%v-%v-%v", cfg.Frontend.Database.Username, cfg.Frontend.Database.Password, cfg.Frontend.Database.Host, cfg.Frontend.Database.Port, cfg.Frontend.Database.Name)
+		if DBStr != frontendDBStr {
+			go metrics.MonitorDB(db.FrontendDB)
+		}
+	}
 
 	logrus.Infof("database connection established")
 	if utils.Config.Chain.SlotsPerEpoch == 0 || utils.Config.Chain.SecondsPerSlot == 0 {
@@ -97,7 +88,7 @@ func main() {
 				logrus.Fatal(err)
 			}
 		} else if utils.Config.Indexer.Node.Type == "lighthouse" {
-			rpcClient, err = rpc.NewLighthouseClient(cfg.Indexer.Node.Host + ":" + cfg.Indexer.Node.Port)
+			rpcClient, err = rpc.NewLighthouseClient("http://" + cfg.Indexer.Node.Host + ":" + cfg.Indexer.Node.Port)
 			if err != nil {
 				logrus.Fatal(err)
 			}
@@ -144,6 +135,7 @@ func main() {
 		apiV1Router.HandleFunc("/block/{slot}/attesterslashings", handlers.ApiBlockAttesterSlashings).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/block/{slot}/proposerslashings", handlers.ApiBlockProposerSlashings).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/block/{slot}/voluntaryexits", handlers.ApiBlockVoluntaryExits).Methods("GET", "OPTIONS")
+		apiV1Router.HandleFunc("/sync_committee/{period}", handlers.ApiSyncCommittee).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/eth1deposit/{txhash}", handlers.ApiEth1Deposit).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/validator/leaderboard", handlers.ApiValidatorLeaderboard).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/validator/{indexOrPubkey}", handlers.ApiValidator).Methods("GET", "OPTIONS")
@@ -153,14 +145,24 @@ func main() {
 		apiV1Router.HandleFunc("/validator/{indexOrPubkey}/proposals", handlers.ApiValidatorProposals).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/validator/{indexOrPubkey}/deposits", handlers.ApiValidatorDeposits).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/validator/{indexOrPubkey}/attestationefficiency", handlers.ApiValidatorAttestationEfficiency).Methods("GET", "OPTIONS")
+		apiV1Router.HandleFunc("/validator/{indexOrPubkey}/attestationeffectiveness", handlers.ApiValidatorAttestationEffectiveness).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/validator/stats/{index}", handlers.ApiValidatorDailyStats).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/validator/eth1/{address}", handlers.ApiValidatorByEth1Address).Methods("GET", "OPTIONS")
+		apiV1Router.HandleFunc("/validators/queue", handlers.ApiValidatorQueue).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/graffitiwall", handlers.ApiGraffitiwall).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/chart/{chart}", handlers.ApiChart).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/user/token", handlers.APIGetToken).Methods("POST", "OPTIONS")
-		apiV1Router.HandleFunc("/dashboard/data/balance", handlers.APIDashboardDataBalance).Methods("GET", "OPTIONS")
+		apiV1Router.HandleFunc("/dashboard/data/balances", handlers.DashboardDataBalance).Methods("GET", "OPTIONS")   // new app versions
+		apiV1Router.HandleFunc("/dashboard/data/balance", handlers.APIDashboardDataBalance).Methods("GET", "OPTIONS") // old app versions
 		apiV1Router.HandleFunc("/dashboard/data/proposals", handlers.DashboardDataProposals).Methods("GET", "OPTIONS")
 		apiV1Router.HandleFunc("/stripe/webhook", handlers.StripeWebhook).Methods("POST")
+		apiV1Router.HandleFunc("/stats/{apiKey}/{machine}", handlers.ClientStatsPostOld).Methods("POST", "OPTIONS")
+		apiV1Router.HandleFunc("/stats/{apiKey}", handlers.ClientStatsPostOld).Methods("POST", "OPTIONS")
+		apiV1Router.HandleFunc("/client/metrics", handlers.ClientStatsPostNew).Methods("POST", "OPTIONS")
+		apiV1Router.HandleFunc("/app/dashboard", handlers.ApiDashboard).Methods("POST", "OPTIONS")
+		apiV1Router.HandleFunc("/rocketpool/stats", handlers.ApiRocketpoolStats).Methods("GET", "OPTIONS")
+		apiV1Router.HandleFunc("/rocketpool/validator/{indexOrPubkey}", handlers.ApiRocketpoolValidators).Methods("GET", "OPTIONS")
+
 		apiV1Router.HandleFunc("/validator/{indexOrPubkey}/widget", handlers.GetMobileWidgetStats).Methods("GET")
 		apiV1Router.Use(utils.CORSMiddleware)
 
@@ -169,18 +171,24 @@ func main() {
 		apiV1AuthRouter.HandleFunc("/mobile/settings", handlers.MobileDeviceSettings).Methods("GET", "OPTIONS")
 		apiV1AuthRouter.HandleFunc("/mobile/settings", handlers.MobileDeviceSettingsPOST).Methods("POST", "OPTIONS")
 		apiV1AuthRouter.HandleFunc("/validator/saved", handlers.MobileTagedValidators).Methods("GET", "OPTIONS")
+		apiV1AuthRouter.HandleFunc("/subscription/register", handlers.RegisterMobileSubscriptions).Methods("POST", "OPTIONS")
 
 		apiV1AuthRouter.HandleFunc("/validator/{pubkey}/add", handlers.UserValidatorWatchlistAdd).Methods("POST", "OPTIONS")
 		apiV1AuthRouter.HandleFunc("/validator/{pubkey}/remove", handlers.UserValidatorWatchlistRemove).Methods("POST", "OPTIONS")
 		apiV1AuthRouter.HandleFunc("/dashboard/save", handlers.UserDashboardWatchlistAdd).Methods("POST", "OPTIONS")
+		apiV1AuthRouter.HandleFunc("/notifications/bundled/subscribe", handlers.MultipleUsersNotificationsSubscribe).Methods("POST", "OPTIONS")
+		apiV1AuthRouter.HandleFunc("/notifications/bundled/unsubscribe", handlers.MultipleUsersNotificationsUnsubscribe).Methods("POST", "OPTIONS")
 		apiV1AuthRouter.HandleFunc("/notifications/subscribe", handlers.UserNotificationsSubscribe).Methods("POST", "OPTIONS")
 		apiV1AuthRouter.HandleFunc("/notifications/unsubscribe", handlers.UserNotificationsUnsubscribe).Methods("POST", "OPTIONS")
-		apiV1AuthRouter.HandleFunc("/clients", handlers.UserClientsAdd).Methods("POST", "OPTIONS")
-		apiV1AuthRouter.HandleFunc("/clients/delete", handlers.UserClientsDelete).Methods("POST", "OPTIONS")
+		apiV1AuthRouter.HandleFunc("/notifications", handlers.UserNotificationsSubscribed).Methods("POST", "GET", "OPTIONS")
+		apiV1AuthRouter.HandleFunc("/stats", handlers.ClientStats).Methods("GET", "OPTIONS")
+		apiV1AuthRouter.HandleFunc("/stats/{offset}/{limit}", handlers.ClientStats).Methods("GET", "OPTIONS")
+		apiV1AuthRouter.HandleFunc("/ethpool", handlers.RegisterEthpoolSubscription).Methods("POST", "OPTIONS")
 		apiV1AuthRouter.Use(utils.CORSMiddleware)
 		apiV1AuthRouter.Use(utils.AuthorizedAPIMiddleware)
 
 		router.HandleFunc("/api/healthz", handlers.ApiHealthz).Methods("GET", "HEAD")
+		router.HandleFunc("/api/healthz-loadbalancer", handlers.ApiHealthzLoadbalancer).Methods("GET", "HEAD")
 
 		services.Init() // Init frontend services
 		price.Init()
@@ -215,6 +223,7 @@ func main() {
 			router.HandleFunc("/index/data", handlers.IndexPageData).Methods("GET")
 			router.HandleFunc("/block/{slotOrHash}", handlers.Block).Methods("GET")
 			router.HandleFunc("/block/{slotOrHash}/deposits", handlers.BlockDepositData).Methods("GET")
+			router.HandleFunc("/block/{slotOrHash}/votes", handlers.BlockVoteData).Methods("GET")
 			router.HandleFunc("/blocks", handlers.Blocks).Methods("GET")
 			router.HandleFunc("/blocks/data", handlers.BlocksData).Methods("GET")
 			router.HandleFunc("/vis", handlers.Vis).Methods("GET")
@@ -229,6 +238,7 @@ func main() {
 			router.HandleFunc("/validator/{index}", handlers.Validator).Methods("GET")
 			router.HandleFunc("/validator/{index}/proposedblocks", handlers.ValidatorProposedBlocks).Methods("GET")
 			router.HandleFunc("/validator/{index}/attestations", handlers.ValidatorAttestations).Methods("GET")
+			router.HandleFunc("/validator/{index}/sync", handlers.ValidatorSync).Methods("GET")
 			router.HandleFunc("/validator/{index}/history", handlers.ValidatorHistory).Methods("GET")
 			router.HandleFunc("/validator/{pubkey}/deposits", handlers.ValidatorDeposits).Methods("GET")
 			router.HandleFunc("/validator/{index}/slashings", handlers.ValidatorSlashings).Methods("GET")
@@ -279,6 +289,12 @@ func main() {
 			router.HandleFunc("/ethClients", handlers.EthClientsServices).Methods("GET")
 			router.HandleFunc("/pools", handlers.Pools).Methods("GET")
 			router.HandleFunc("/pools/streak/current", handlers.GetAvgCurrentStreak).Methods("GET")
+			router.HandleFunc("/pools/chart/income_per_eth", handlers.GetIncomePerEthChart).Methods("GET")
+			router.HandleFunc("/pools/rocketpool", handlers.PoolsRocketpool).Methods("GET")
+			router.HandleFunc("/pools/rocketpool/data/minipools", handlers.PoolsRocketpoolDataMinipools).Methods("GET")
+			router.HandleFunc("/pools/rocketpool/data/nodes", handlers.PoolsRocketpoolDataNodes).Methods("GET")
+			router.HandleFunc("/pools/rocketpool/data/dao_proposals", handlers.PoolsRocketpoolDataDAOProposals).Methods("GET")
+			router.HandleFunc("/pools/rocketpool/data/dao_members", handlers.PoolsRocketpoolDataDAOMembers).Methods("GET")
 
 			router.HandleFunc("/advertisewithus", handlers.AdvertiseWithUs).Methods("GET")
 			router.HandleFunc("/advertisewithus", handlers.AdvertiseWithUsPost).Methods("POST")
@@ -286,6 +302,9 @@ func main() {
 			// confirming the email update should not require auth
 			router.HandleFunc("/settings/email/{hash}", handlers.UserConfirmUpdateEmail).Methods("GET")
 			router.HandleFunc("/gitcoinfeed", handlers.GitcoinFeed).Methods("GET")
+			router.HandleFunc("/rewards", handlers.ValidatorRewards).Methods("GET")
+			router.HandleFunc("/rewards/hist", handlers.RewardsHistoricalData).Methods("GET")
+			router.HandleFunc("/rewards/hist/download", handlers.DownloadRewardsHistoricalData).Methods("GET")
 
 			// router.HandleFunc("/user/validators", handlers.UserValidators).Methods("GET")
 
@@ -305,6 +324,7 @@ func main() {
 			signUpRouter.HandleFunc("/confirmation", handlers.Confirmation).Methods("GET")
 			signUpRouter.HandleFunc("/pricing", handlers.Pricing).Methods("GET")
 			signUpRouter.HandleFunc("/pricing", handlers.PricingPost).Methods("POST")
+			signUpRouter.HandleFunc("/premium", handlers.MobilePricing).Methods("GET")
 			signUpRouter.Use(csrfHandler)
 
 			oauthRouter := router.PathPrefix("/user").Subrouter()
@@ -314,18 +334,31 @@ func main() {
 
 			authRouter := router.PathPrefix("/user").Subrouter()
 			authRouter.HandleFunc("/mobile/settings", handlers.MobileDeviceSettingsPOST).Methods("POST")
+			authRouter.HandleFunc("/mobile/delete", handlers.MobileDeviceDeletePOST).Methods("POST", "OPTIONS")
 			authRouter.HandleFunc("/authorize", handlers.UserAuthorizeConfirmPost).Methods("POST")
 			authRouter.HandleFunc("/settings", handlers.UserSettings).Methods("GET")
 			authRouter.HandleFunc("/settings/password", handlers.UserUpdatePasswordPost).Methods("POST")
+			authRouter.HandleFunc("/settings/flags", handlers.UserUpdateFlagsPost).Methods("POST")
 			authRouter.HandleFunc("/settings/delete", handlers.UserDeletePost).Methods("POST")
 			authRouter.HandleFunc("/settings/email", handlers.UserUpdateEmailPost).Methods("POST")
-			authRouter.HandleFunc("/notifications", handlers.UserNotifications).Methods("GET")
+			authRouter.HandleFunc("/notifications", handlers.UserNotificationsCenter).Methods("GET")
 			authRouter.HandleFunc("/notifications/data", handlers.UserNotificationsData).Methods("GET")
 			authRouter.HandleFunc("/notifications/subscribe", handlers.UserNotificationsSubscribe).Methods("POST")
 			authRouter.HandleFunc("/notifications/unsubscribe", handlers.UserNotificationsUnsubscribe).Methods("POST")
+			authRouter.HandleFunc("/notifications/bundled/subscribe", handlers.MultipleUsersNotificationsSubscribeWeb).Methods("POST", "OPTIONS")
+			authRouter.HandleFunc("/notifications-center", handlers.UserNotificationsCenter).Methods("GET")
+			authRouter.HandleFunc("/notifications-center/removeall", handlers.RemoveAllValidatorsAndUnsubscribe).Methods("POST")
+			authRouter.HandleFunc("/notifications-center/validatorsub", handlers.AddValidatorsAndSubscribe).Methods("POST")
+			authRouter.HandleFunc("/notifications-center/updatesubs", handlers.UserUpdateSubscriptions).Methods("POST")
+			// authRouter.HandleFunc("/notifications-center/monitoring/updatesubs", handlers.UserUpdateMonitoringSubscriptions).Methods("POST")
 			authRouter.HandleFunc("/subscriptions/data", handlers.UserSubscriptionsData).Methods("GET")
 			authRouter.HandleFunc("/generateKey", handlers.GenerateAPIKey).Methods("POST")
 			authRouter.HandleFunc("/ethClients", handlers.EthClientsServices).Methods("GET")
+			authRouter.HandleFunc("/rewards", handlers.ValidatorRewards).Methods("GET")
+			authRouter.HandleFunc("/rewards/subscribe", handlers.RewardNotificationSubscribe).Methods("POST")
+			authRouter.HandleFunc("/rewards/unsubscribe", handlers.RewardNotificationUnsubscribe).Methods("POST")
+			authRouter.HandleFunc("/rewards/subscriptions/data", handlers.RewardGetUserSubscriptions).Methods("POST")
+
 			err = initStripe(authRouter)
 			if err != nil {
 				logrus.Errorf("error could not init stripe, %v", err)
@@ -381,7 +414,6 @@ func main() {
 			}
 		}()
 	}
-
 	if utils.Config.Notifications.Enabled {
 		services.InitNotifications()
 	}

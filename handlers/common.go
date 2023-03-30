@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/lib/pq"
 )
@@ -31,7 +32,7 @@ func GetValidatorOnlineThresholdSlot() uint64 {
 }
 
 // GetValidatorEarnings will return the earnings (last day, week, month and total) of selected validators
-func GetValidatorEarnings(validators []uint64) (*types.ValidatorEarnings, error) {
+func GetValidatorEarnings(validators []uint64, currency string) (*types.ValidatorEarnings, error) {
 	validatorsPQArray := pq.Array(validators)
 	latestEpoch := int64(services.LatestEpoch())
 	lastDayEpoch := latestEpoch - 225
@@ -91,8 +92,7 @@ func GetValidatorEarnings(validators []uint64) (*types.ValidatorEarnings, error)
 	var totalDeposits int64
 
 	for _, balance := range balances {
-
-		if int64(balance.ActivationEpoch) > latestEpoch {
+		if int64(balance.ActivationEpoch) >= latestEpoch {
 			continue
 		}
 		for epoch, deposit := range depositsMap[fmt.Sprintf("%x", balance.PublicKey)] {
@@ -121,6 +121,7 @@ func GetValidatorEarnings(validators []uint64) (*types.ValidatorEarnings, error)
 		if int64(balance.ActivationEpoch) > lastMonthEpoch {
 			balance.Balance31d = balance.BalanceActivation
 		}
+
 		earningsTotal += int64(balance.Balance) - int64(balance.BalanceActivation)
 		earningsLastDay += int64(balance.Balance) - int64(balance.Balance1d)
 		earningsLastWeek += int64(balance.Balance) - int64(balance.Balance7d)
@@ -133,12 +134,17 @@ func GetValidatorEarnings(validators []uint64) (*types.ValidatorEarnings, error)
 	}
 
 	return &types.ValidatorEarnings{
-		Total:         earningsTotal,
-		LastDay:       earningsLastDay,
-		LastWeek:      earningsLastWeek,
-		LastMonth:     earningsLastMonth,
-		APR:           apr,
-		TotalDeposits: totalDeposits,
+		Total:                earningsTotal,
+		LastDay:              earningsLastDay,
+		LastWeek:             earningsLastWeek,
+		LastMonth:            earningsLastMonth,
+		APR:                  apr,
+		TotalDeposits:        totalDeposits,
+		LastDayFormatted:     utils.FormatIncome(earningsLastDay, currency),
+		LastWeekFormatted:    utils.FormatIncome(earningsLastWeek, currency),
+		LastMonthFormatted:   utils.FormatIncome(earningsLastMonth, currency),
+		TotalFormatted:       utils.FormatIncome(earningsTotal, currency),
+		TotalChangeFormatted: utils.FormatIncome(earningsTotal+totalDeposits, currency),
 	}, nil
 }
 
@@ -162,10 +168,64 @@ func LatestState(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetCurrency(r *http.Request) string {
-
 	if cookie, err := r.Cookie("currency"); err == nil {
 		return cookie.Value
 	}
 
 	return "ETH"
+}
+
+func GetCurrencySymbol(r *http.Request) string {
+
+	cookie, err := r.Cookie("currency")
+	if err != nil {
+		return "$"
+	}
+
+	switch cookie.Value {
+	case "AUD":
+		return "A$"
+	case "CAD":
+		return "C$"
+	case "CNY":
+		return "¥"
+	case "EUR":
+		return "€"
+	case "GBP":
+		return "£"
+	case "JPY":
+		return "¥"
+	case "RUB":
+		return "₽"
+	default:
+		return "$"
+	}
+}
+
+func GetCurrentPrice(r *http.Request) uint64 {
+	cookie, err := r.Cookie("currency")
+	if err != nil {
+		return price.GetEthRoundPrice(price.GetEthPrice("USD"))
+	}
+
+	if cookie.Value == "ETH" {
+		return price.GetEthRoundPrice(price.GetEthPrice("USD"))
+	}
+	return price.GetEthRoundPrice(price.GetEthPrice(cookie.Value))
+}
+
+func GetCurrentPriceFormatted(r *http.Request) string {
+	userAgent := r.Header.Get("User-Agent")
+	userAgent = strings.ToLower(userAgent)
+	price := GetCurrentPrice(r)
+	if strings.Contains(userAgent, "android") || strings.Contains(userAgent, "iphone") || strings.Contains(userAgent, "windows phone") {
+		return fmt.Sprintf("%s", utils.KFormatterEthPrice(price))
+	}
+	return fmt.Sprintf("%s", utils.FormatAddCommas(uint64(price)))
+}
+
+func GetTruncCurrentPriceFormatted(r *http.Request) string {
+	price := GetCurrentPrice(r)
+	symbol := GetCurrencySymbol(r)
+	return fmt.Sprintf("%s %s", symbol, utils.KFormatterEthPrice(price))
 }

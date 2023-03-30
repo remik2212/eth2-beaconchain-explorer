@@ -19,9 +19,8 @@ import (
 )
 
 var dashboardTemplate = template.Must(template.New("dashboard").Funcs(utils.GetTemplateFuncs()).ParseFiles("templates/layout.html", "templates/dashboard.html"))
-var validatorLimit = 200
 
-func parseValidatorsFromQueryString(str string) ([]uint64, error) {
+func parseValidatorsFromQueryString(str string, validatorLimit int) ([]uint64, error) {
 	if str == "" {
 		return []uint64{}, nil
 	}
@@ -55,8 +54,10 @@ func parseValidatorsFromQueryString(str string) ([]uint64, error) {
 
 func Dashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
+	validatorLimit := getUserPremium(r).MaxValidators
 
 	dashboardData := types.DashboardData{}
+	dashboardData.ValidatorLimit = validatorLimit
 
 	data := InitPageData(w, r, "dashboard", "/dashboard", "Dashboard")
 	data.HeaderAd = true
@@ -77,8 +78,8 @@ func DashboardDataBalance(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	q := r.URL.Query()
-
-	queryValidators, err := parseValidatorsFromQueryString(q.Get("validators"))
+	validatorLimit := getUserPremium(r).MaxValidators
+	queryValidators, err := parseValidatorsFromQueryString(q.Get("validators"), validatorLimit)
 	if err != nil {
 		logger.WithError(err).WithField("route", r.URL.String()).Error("error parsing validators from query string")
 		http.Error(w, "Invalid query", 400)
@@ -98,34 +99,36 @@ func DashboardDataBalance(w http.ResponseWriter, r *http.Request) {
 	latestEpoch := services.LatestEpoch()
 
 	var incomeHistory []*types.ValidatorIncomeHistory
-	err = db.DB.Select(&incomeHistory, "select day, SUM(start_balance) as start_balance, SUM(end_balance) as end_balance, COALESCE(SUM(deposits_amount), 0) as deposits_amount from validator_stats where validatorindex = ANY($1) GROUP BY day ORDER BY day;", queryValidatorsArr)
+	err = db.DB.Select(&incomeHistory, "SELECT day, COALESCE(SUM(start_balance),0) AS start_balance, COALESCE(SUM(end_balance),0) AS end_balance, COALESCE(SUM(deposits_amount), 0) AS deposits_amount FROM validator_stats WHERE validatorindex = ANY($1) GROUP BY day ORDER BY day;", queryValidatorsArr)
 	if err != nil {
 		logger.Errorf("error retrieving validator balance history: %v", err)
 		http.Error(w, "Internal server error", 503)
 		return
 	}
 	var currentBalance uint64
-	err = db.DB.Get(&currentBalance, "SELECT SUM(balance) as balance FROM validators WHERE validatorindex = ANY($1)", queryValidatorsArr)
+	err = db.DB.Get(&currentBalance, "SELECT SUM(balance) as balance FROM validators WHERE validatorindex = ANY($1) AND status <> 'deposited'", queryValidatorsArr)
 	if err != nil {
 		logger.Errorf("error retrieving validator current balance: %v", err)
 		http.Error(w, "Internal server error", 503)
 		return
 	}
 
-	incomeHistoryChartData := make([]*types.ChartDataPoint, len(incomeHistory))
+	incomeHistoryChartData := make([]*types.ChartDataPoint, len(incomeHistory)+1)
 
 	if len(incomeHistory) > 0 {
-		for i := 0; i < len(incomeHistory)-1; i++ {
-			income := incomeHistory[i+1].StartBalance - incomeHistory[i].StartBalance
-			if income >= incomeHistory[i].Deposits {
-				income = income - incomeHistory[i].Deposits
+		for i := 0; i < len(incomeHistory); i++ {
+			var income int64
+			if i == len(incomeHistory)-1 {
+				income = incomeHistory[i].EndBalance - incomeHistory[i].StartBalance - incomeHistory[i].Deposits
+			} else {
+				income = incomeHistory[i+1].StartBalance - incomeHistory[i].StartBalance - incomeHistory[i].Deposits
 			}
 			color := "#7cb5ec"
 			if income < 0 {
 				color = "#f7a35c"
 			}
 			change := utils.ExchangeRateForCurrency(currency) * (float64(income) / 1000000000)
-			balanceTs := utils.DayToTime(incomeHistory[i+1].Day)
+			balanceTs := utils.DayToTime(incomeHistory[i].Day)
 			incomeHistoryChartData[i] = &types.ChartDataPoint{X: float64(balanceTs.Unix() * 1000), Y: change, Color: color}
 		}
 
@@ -138,7 +141,7 @@ func DashboardDataBalance(w http.ResponseWriter, r *http.Request) {
 
 		currentDay := latestEpoch / ((24 * 60 * 60) / utils.Config.Chain.SlotsPerEpoch / utils.Config.Chain.SecondsPerSlot)
 
-		incomeHistoryChartData[len(incomeHistoryChartData)-1] = &types.ChartDataPoint{X: float64(utils.DayToTime(currentDay).Unix() * 1000), Y: utils.ExchangeRateForCurrency(currency) * (float64(lastDayIncome) / 1000000000), Color: lastDayIncomeColor}
+		incomeHistoryChartData[len(incomeHistoryChartData)-1] = &types.ChartDataPoint{X: float64(utils.DayToTime(int64(currentDay)).Unix() * 1000), Y: utils.ExchangeRateForCurrency(currency) * (float64(lastDayIncome) / 1000000000), Color: lastDayIncomeColor}
 	}
 
 	err = json.NewEncoder(w).Encode(incomeHistoryChartData)
@@ -153,8 +156,8 @@ func DashboardDataProposals(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	q := r.URL.Query()
-
-	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"))
+	validatorLimit := getUserPremium(r).MaxValidators
+	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"), validatorLimit)
 	if err != nil {
 		http.Error(w, "Invalid query", 400)
 		return
@@ -197,8 +200,8 @@ func DashboardDataMissedAttestations(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	q := r.URL.Query()
-
-	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"))
+	validatorLimit := getUserPremium(r).MaxValidators
+	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"), validatorLimit)
 	if err != nil {
 		http.Error(w, "Invalid query", 400)
 		return
@@ -254,8 +257,8 @@ func DashboardDataValidators(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	q := r.URL.Query()
-
-	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"))
+	validatorLimit := getUserPremium(r).MaxValidators
+	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"), validatorLimit)
 	if err != nil {
 		http.Error(w, "Invalid query", 400)
 		return
@@ -385,14 +388,14 @@ func DashboardDataEarnings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	q := r.URL.Query()
-
-	queryValidators, err := parseValidatorsFromQueryString(q.Get("validators"))
+	validatorLimit := getUserPremium(r).MaxValidators
+	queryValidators, err := parseValidatorsFromQueryString(q.Get("validators"), validatorLimit)
 	if err != nil {
 		http.Error(w, "Invalid query", 400)
 		return
 	}
 
-	earnings, err := GetValidatorEarnings(queryValidators)
+	earnings, err := GetValidatorEarnings(queryValidators, GetCurrency(r))
 	if err != nil {
 		logger.WithError(err).WithField("route", r.URL.String()).Errorf("error retrieving validator earnings")
 		http.Error(w, "Internal server error", 503)
@@ -414,8 +417,8 @@ func DashboardDataEffectiveness(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	q := r.URL.Query()
-
-	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"))
+	validatorLimit := getUserPremium(r).MaxValidators
+	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"), validatorLimit)
 	if err != nil {
 		logger.Errorf("error retrieving active validators %v", err)
 		http.Error(w, "Invalid query", 400)
@@ -466,8 +469,8 @@ func DashboardDataProposalsHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	q := r.URL.Query()
-
-	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"))
+	validatorLimit := getUserPremium(r).MaxValidators
+	filterArr, err := parseValidatorsFromQueryString(q.Get("validators"), validatorLimit)
 	if err != nil {
 		http.Error(w, "Invalid query", 400)
 		return
@@ -476,7 +479,7 @@ func DashboardDataProposalsHistory(w http.ResponseWriter, r *http.Request) {
 
 	proposals := []struct {
 		ValidatorIndex uint64  `db:"validatorindex"`
-		Day            uint64  `db:"day"`
+		Day            int64   `db:"day"`
 		Proposed       *uint64 `db:"proposed_blocks"`
 		Missed         *uint64 `db:"missed_blocks"`
 		Orphaned       *uint64 `db:"orphaned_blocks"`

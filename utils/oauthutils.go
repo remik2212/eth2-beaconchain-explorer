@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -30,6 +31,7 @@ const ClaimsContextKey = "ClaimsKey"
 const MobileAuthorizedKey = "MobileAuthKey"
 
 const JsonBodyKey = "JsonBodyKey"
+const JsonBodyNakedKey = "JsonBodyNakedKey"
 
 var logger = logrus.New().WithField("module", "oauth")
 var signingMethod = jwt.SigningMethodHS256
@@ -39,6 +41,8 @@ type CustomClaims struct {
 	UserID   uint64 `json:"userID"`
 	AppID    uint64 `json:"appID"`
 	DeviceID uint64 `json:"deviceID"`
+	Package  string `json:"package"`
+	Theme    string `json:"theme"`
 	jwt.StandardClaims
 }
 
@@ -57,7 +61,7 @@ type OAuthErrorResponse struct {
 }
 
 // CreateAccessToken Creates a new access token for a given user
-func CreateAccessToken(userID, appID, deviceID uint64) (string, int, error) {
+func CreateAccessToken(userID, appID, deviceID uint64, pkg, theme string) (string, int, error) {
 	expiresIn := Config.Frontend.JwtValidityInMinutes * 60
 
 	standardlaims := jwt.StandardClaims{
@@ -69,6 +73,8 @@ func CreateAccessToken(userID, appID, deviceID uint64) (string, int, error) {
 		userID,
 		appID,
 		deviceID,
+		pkg,
+		theme,
 		standardlaims,
 	})
 
@@ -118,6 +124,10 @@ func accessTokenGetClaims(tokenStringFull string, validate bool) (*CustomClaims,
 	if err != nil && validate {
 		logger.Errorf("Error parsing jwt token: %v %v", err, token)
 		return nil, err
+	}
+
+	if token == nil {
+		return nil, fmt.Errorf("error token is not defined %v", tokenStringFull)
 	}
 
 	// Make sure header hasnt been tampered with
@@ -184,6 +194,19 @@ func SendOAuthErrorResponse(j *json.Encoder, route, errString, description strin
 	return
 }
 
+func GetAuthorizationClaims(r *http.Request) *CustomClaims {
+	accessToken := r.Header.Get("Authorization")
+	if len(accessToken) <= 0 {
+		return nil
+	}
+
+	claims, err := ValidateAccessTokenGetClaims(accessToken)
+	if err != nil {
+		return nil
+	}
+	return claims
+}
+
 // AuthorizedAPIMiddleware Demands an Authorization header to be present with a valid user api token
 // Once authorization passes, this middleware sets a context entry with the authenticated userID
 func AuthorizedAPIMiddleware(next http.Handler) http.Handler {
@@ -216,6 +239,7 @@ func AuthorizedAPIMiddleware(next http.Handler) http.Handler {
 				keyVal := make(map[string]interface{})
 				json.Unmarshal(body, &keyVal)
 				context.Set(r, JsonBodyKey, keyVal)
+				context.Set(r, JsonBodyNakedKey, body)
 			}
 		}
 
